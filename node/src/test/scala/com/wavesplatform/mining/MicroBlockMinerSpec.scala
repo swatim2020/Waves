@@ -35,7 +35,8 @@ class MicroBlockMinerSpec extends FlatSpec with Matchers with PathMockFactory wi
         utxPool,
         settings.minerSettings,
         scheduler,
-        scheduler
+        scheduler,
+        Task.sleep(200 millis)
       )
 
       def generateBlocks(
@@ -43,18 +44,19 @@ class MicroBlockMinerSpec extends FlatSpec with Matchers with PathMockFactory wi
           constraint: MiningConstraint,
           lastMicroBlock: Long
       ): Block = {
-        val task = microBlockMiner.generateOneMicroBlockTask(
+        val task = Task.defer(microBlockMiner.generateOneMicroBlockTask(
           acc,
           block,
           constraint,
           lastMicroBlock
-        )
+        ))
         import Scheduler.Implicits.global
         val startTime = System.nanoTime()
         val tx = CreateAliasTransaction
           .selfSigned(TxVersion.V1, acc, Alias.create("test" + Random.nextInt()).explicitGet(), TestValues.fee, TestValues.timestamp)
           .explicitGet()
         utxPool.putIfNew(tx).resultE.explicitGet()
+        utxPool.size should be > 0
         val result = task.runSyncUnsafe()
         result match {
           case res @ MicroBlockMinerImpl.Success(b, totalConstraint) =>
