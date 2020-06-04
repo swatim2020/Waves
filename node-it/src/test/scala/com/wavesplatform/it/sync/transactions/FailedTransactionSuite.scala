@@ -215,6 +215,7 @@ class FailedTransactionSuite extends BaseTransactionSuite with CancelAfterFailur
     val prevAssetBalance = sender.assetBalance(contractAddress, smartAsset)
     val prevAssets       = sender.assetsBalance(contractAddress).balances.map(_.assetId)
 
+    overflowBlock()
     sendTxsAndThenPriorityTx(
       _ => sender.invokeScript(caller, contractAddress, Some("tikTok"), fee = invokeFee)._1.id,
       () => updateAssetScript(result = false, smartAsset, contract, priorityFee)
@@ -437,6 +438,7 @@ class FailedTransactionSuite extends BaseTransactionSuite with CancelAfterFailur
     waitForEmptyUtx()
     overflowBlock()
 
+    overflowBlock()
     val failedTxs = sendTxsAndThenPriorityTx(
       _ => sender.invokeScript(caller, contractAddress, Some("tikTok"), fee = invokeFee)._1.id,
       () => updateAssetScript(result = false, smartAsset, contract, priorityFee)
@@ -561,6 +563,7 @@ class FailedTransactionSuite extends BaseTransactionSuite with CancelAfterFailur
         logPriorityTx(priorityTx)
         assertInvalidTxs(txs)
       }
+      waitForEmptyUtx()
       updateAccountScript(None, invalidAccount, setScriptFee + smartFee)
     }
   }
