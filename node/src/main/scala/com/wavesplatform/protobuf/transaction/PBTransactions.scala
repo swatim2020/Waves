@@ -58,9 +58,8 @@ object PBTransactions {
   def vanilla(signedTx: PBSignedTransaction, unsafe: Boolean = false): Either[ValidationError, VanillaTransaction] = {
     for {
       parsedTx <- signedTx.transaction.toRight(GenericError("Transaction must be specified"))
-      fee      <- parsedTx.fee.toRight(GenericError("Fee must be specified"))
       _        <- Either.cond(parsedTx.data.isDefined, (), GenericError("Transaction data must be specified"))
-      feeAmount = PBAmounts.toAssetAndAmount(fee)
+      feeAmount = parsedTx.fee.map(PBAmounts.toAssetAndAmount).getOrElse((Waves, 0L))
       sender    = PublicKey(parsedTx.senderPublicKey.toByteArray)
       tx <- if (unsafe)
         Right(
