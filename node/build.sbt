@@ -64,7 +64,8 @@ bashScriptExtraDefines ++= Seq(
   s"""addJava "-Dwaves.defaults.blockchain.type=${network.value}"""",
   s"""addJava "-Dwaves.defaults.directory=/var/lib/${(Universal / normalizedName).value}"""",
   s"""addJava "-Dwaves.defaults.config.directory=/etc/${(Universal / normalizedName).value}""""
-);
+)
+
 inConfig(Universal)(
   Seq(
     mappings += (baseDirectory.value / s"waves-sample.conf" -> "doc/waves.conf.sample"),
