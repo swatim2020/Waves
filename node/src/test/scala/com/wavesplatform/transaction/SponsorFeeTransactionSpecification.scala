@@ -3,8 +3,8 @@ package com.wavesplatform.transaction
 import com.wavesplatform.account.PublicKey
 import com.wavesplatform.block.Block
 import com.wavesplatform.common.state.ByteStr
-import com.wavesplatform.db.WithState
 import com.wavesplatform.common.utils.{Base64, EitherExt2}
+import com.wavesplatform.db.WithState
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.features.BlockchainFeatures._
 import com.wavesplatform.lagonaki.mocks.TestBlock.{create => block}
@@ -92,13 +92,12 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
         1.toByte,
         PublicKey.fromBase58String("FM5ojNqW7e9cZ9zhPYGkpSP1Pcd8Z3e3MNKYVS5pGJ8Z").explicitGet(),
         IssuedAsset(ByteStr.decodeBase58("9ekQuYn92natMnMq8KqeGK3Nn7cpKd3BvPEGgD6fFyyz").get),
-        Some(100000),
+        Some(100000L),
         One,
         1520945679531L,
         Proofs(Seq(ByteStr.decodeBase58("3QrF81WkwGhbNvKcwpAVyBPL1MLuAG5qmR6fmtK9PTYQoFKGsFg1Rtd2kbMBuX2ZfiFX58nR1XwC19LUXZUmkXE7").get))
       )
-      .right
-      .get
+      .explicitGet()
     js shouldEqual tx.json()
   }
 
@@ -145,7 +144,7 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
     js shouldEqual tx.json()
     js shouldEqual tx1.json()
   }
-  val invalidFee =
+  private val invalidFee =
     Table(
       "fee",
       -1 * Constants.UnitsInWave,
@@ -185,9 +184,9 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
       (acc, name, desc, quantity, decimals, reissuable, fee, ts) <- issueParamGen
       genesis = GenesisTransaction.create(acc.toAddress, ENOUGH_AMT, ts).explicitGet()
       issue   = IssueTransaction(TxVersion.V1, acc.publicKey, name, desc, quantity, decimals, reissuable, script = None, fee, ts).signWith(acc.privateKey)
-      minFee <- Gen.choose(1, issue.quantity)
+      minFee <- Gen.choose(1L, issue.quantity)
       sponsor  = SponsorFeeTransaction.selfSigned(1.toByte, acc, IssuedAsset(issue.id()), Some(minFee), One, ts).explicitGet()
-      transfer = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1, feeAsset = IssuedAsset(issue.id()), minFee, None, ts).explicitGet()
+      transfer = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1L, feeAsset = IssuedAsset(issue.id()), minFee, ByteStr.empty,  ts).explicitGet()
     } yield (acc, genesis, issue, sponsor, transfer)
 
     forAll(setup) {
@@ -208,13 +207,11 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
       (acc, name, desc, quantity, decimals, reissuable, fee, ts) <- issueParamGen
       genesis = GenesisTransaction.create(acc.toAddress, ENOUGH_AMT, ts).explicitGet()
       issue   = IssueTransaction(TxVersion.V1, acc.publicKey, name, desc, quantity, decimals, reissuable, script = None, fee, ts).signWith(acc.privateKey)
-      minFee <- Gen.choose(1000000, issue.quantity)
+      minFee <- Gen.choose(1000000L, issue.quantity)
       sponsor = SponsorFeeTransaction.selfSigned(1.toByte, acc, IssuedAsset(issue.id()), Some(minFee), One, ts).explicitGet()
-      transfer1 = TransferTransaction
-        .selfSigned(1.toByte, acc, acc.toAddress, Waves, 1, feeAsset = IssuedAsset(issue.id()), minFee + 7, None, ts)
+      transfer1 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1L, feeAsset = IssuedAsset(issue.id()), minFee + 7, ByteStr.empty,  ts)
         .explicitGet()
-      transfer2 = TransferTransaction
-        .selfSigned(1.toByte, acc, acc.toAddress, Waves, 1, feeAsset = IssuedAsset(issue.id()), minFee + 9, None, ts)
+      transfer2 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1L, feeAsset = IssuedAsset(issue.id()), minFee + 9, ByteStr.empty,  ts)
         .explicitGet()
     } yield (acc, genesis, issue, sponsor, transfer1, transfer2)
 
@@ -239,9 +236,9 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
       minFee <- Gen.choose(1, issue.quantity / 11)
 
       sponsor1  = SponsorFeeTransaction.selfSigned(1.toByte, acc, IssuedAsset(issue.id()), Some(minFee), One, ts).explicitGet()
-      transfer1 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1, IssuedAsset(issue.id()), fee = minFee, None, ts).explicitGet()
+      transfer1 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1L, IssuedAsset(issue.id()), fee = minFee, ByteStr.empty,  ts).explicitGet()
       sponsor2  = SponsorFeeTransaction.selfSigned(1.toByte, acc, IssuedAsset(issue.id()), Some(minFee * 10), One, ts).explicitGet()
-      transfer2 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1, IssuedAsset(issue.id()), fee = minFee * 10, None, ts).explicitGet()
+      transfer2 = TransferTransaction.selfSigned(1.toByte, acc, acc.toAddress, Waves, 1L, IssuedAsset(issue.id()), fee = minFee * 10, ByteStr.empty,  ts).explicitGet()
     } yield (acc, genesis, issue, sponsor1, transfer1, sponsor2, transfer2)
 
     forAll(setup) {
@@ -279,7 +276,7 @@ class SponsorFeeTransactionSpecification extends PropSpec with PropertyChecks wi
         }
 
         assertDiffEi(Seq(b0), b2, BlockV5Settings) { ei =>
-          ei shouldBe 'right
+          ei.explicitGet()
         }
     }
   }

@@ -12,7 +12,7 @@ import com.wavesplatform.crypto
 import com.wavesplatform.it.Node
 import com.wavesplatform.it.util.GlobalTimer.{instance => timer}
 import com.wavesplatform.it.util._
-import com.wavesplatform.lang.script.Script
+import com.wavesplatform.lang.script.{Script => Scr}
 import com.wavesplatform.lang.v1.Serde
 import com.wavesplatform.lang.v1.compiler.Terms.FUNCTION_CALL
 import com.wavesplatform.protobuf.Amount
@@ -57,7 +57,8 @@ object AsyncGrpcApi {
       result.runToFuture.map { r =>
         import com.wavesplatform.state.{InvokeScriptResult => VISR}
         r.map { r =>
-          val tx     = PBTransactions.vanillaUnsafe(r.getTransaction)
+          val tx = PBTransactions.vanillaUnsafe(r.getTransaction)
+          assert(r.getResult.transfers.forall(_.address.size() == 20))
           val result = Json.toJson(VISR.fromPB(r.getResult)).as[StateChangesDetails]
           (tx, result)
         }
@@ -80,7 +81,7 @@ object AsyncGrpcApi {
         reissuable: Boolean,
         fee: Long,
         description: String = "",
-        script: Either[Array[Byte], Option[Script]] = Right(None),
+        script: Either[Array[Byte], Option[Scr]] = Right(None),
         version: Int = 2
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
@@ -95,7 +96,8 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          val proofs =
+            crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
           transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
@@ -108,7 +110,7 @@ object AsyncGrpcApi {
         version: Int = 2,
         assetId: String = "WAVES",
         feeAssetId: String = "WAVES",
-        attachment: Attachment.Attachment = Attachment.Attachment.Empty,
+        attachment: ByteString = ByteString.EMPTY,
         timestamp: Long = System.currentTimeMillis
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
@@ -121,7 +123,7 @@ object AsyncGrpcApi {
           TransferTransactionData.of(
             Some(recipient),
             Some(Amount.of(if (assetId == "WAVES") ByteString.EMPTY else ByteString.copyFrom(Base58.decode(assetId)), amount)),
-            Some(Attachment(attachment))
+            attachment
           )
         )
       )
@@ -232,13 +234,13 @@ object AsyncGrpcApi {
         )
       )
 
-      val proofs      = crypto.sign(matcher.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).right.get.bodyBytes())
+      val proofs      = crypto.sign(matcher.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
       val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr)))
 
       transactions.broadcast(transaction)
     }
 
-    private def toPBScript(v: Either[Array[Byte], Option[Script]]): ByteString = v match {
+    private def toPBScript(v: Either[Array[Byte], Option[Scr]]): ByteString = v match {
       case Left(bytes) if bytes.length > 0 => ByteString.copyFrom(bytes)
       case Right(maybeScript)              => PBTransactions.toPBScript(maybeScript)
       case _                               => ByteString.EMPTY
@@ -246,7 +248,7 @@ object AsyncGrpcApi {
 
     def setScript(
         sender: KeyPair,
-        script: Either[Array[Byte], Option[Script]],
+        script: Either[Array[Byte], Option[Scr]],
         fee: Long,
         timestamp: Long = System.currentTimeMillis(),
         version: Int = 1
@@ -263,7 +265,8 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          val proofs =
+            crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
           transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
@@ -370,7 +373,7 @@ object AsyncGrpcApi {
           MassTransferTransactionData.of(
             if (assetId.isDefined) ByteString.copyFrom(Base58.decode(assetId.get)) else ByteString.EMPTY,
             transfers,
-            if (attachment.isEmpty) None else Some(Attachment.of(Attachment.Attachment.BinaryValue(attachment)))
+            attachment
           )
         )
       )
@@ -434,7 +437,7 @@ object AsyncGrpcApi {
     def setAssetScript(
         sender: KeyPair,
         assetId: String,
-        script: Either[Array[Byte], Option[Script]],
+        script: Either[Array[Byte], Option[Scr]],
         fee: Long,
         timestamp: Long = System.currentTimeMillis(),
         version: Int = 1
@@ -451,7 +454,8 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          val proofs =
+            crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
           transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
@@ -496,7 +500,7 @@ object AsyncGrpcApi {
   }
 
   private def createCallObserver[T](implicit s: Scheduler): (StreamObserver[T], Task[List[T]]) = {
-    val subj = ConcurrentSubject.publishToOne[T]
+    val subj = ConcurrentSubject.replay[T]
 
     val observer = new StreamObserver[T] {
       override def onNext(value: T): Unit      = subj.onNext(value)

@@ -12,11 +12,10 @@ import com.wavesplatform.crypto
 import com.wavesplatform.features.EstimatorProvider._
 import com.wavesplatform.http.BroadcastRoute
 import com.wavesplatform.lang.contract.DApp
-import com.wavesplatform.lang.contract.meta.Dic
+import com.wavesplatform.lang.contract.meta.FunctionSignatures
 import com.wavesplatform.lang.script.ContractScript.ContractScriptImpl
 import com.wavesplatform.lang.{Global, ValidationError}
 import com.wavesplatform.network.UtxPoolSynchronizer
-import com.wavesplatform.protobuf.api
 import com.wavesplatform.settings.RestAPISettings
 import com.wavesplatform.state.Blockchain
 import com.wavesplatform.state.diffs.FeeValidation
@@ -41,7 +40,6 @@ case class AddressApiRoute(
 ) extends ApiRoute
     with BroadcastRoute
     with AuthRoute
-    with AutoParamsDirective
     with TimeLimitedRoute {
 
   import AddressApiRoute._
@@ -51,7 +49,7 @@ case class AddressApiRoute(
   override lazy val route: Route =
     pathPrefix("addresses") {
       balanceDetails ~ validate ~ seed ~ balanceWithConfirmations ~ balance ~ balances ~ balancesPost ~ balanceWithConfirmations ~ verify ~ sign ~ deleteAddress ~ verifyText ~
-        signText ~ seq ~ publicKey ~ effectiveBalance ~ effectiveBalanceWithConfirmations ~ getData ~ getDataItem ~ postData ~ scriptInfo ~ scriptMeta
+        signText ~ seq ~ publicKey ~ effectiveBalance ~ effectiveBalanceWithConfirmations ~ getData ~ postData ~ scriptInfo ~ scriptMeta
     } ~ root ~ create
 
   def scriptInfo: Route = (path("scriptInfo" / AddrSegment) & get) { address =>
@@ -68,13 +66,15 @@ case class AddressApiRoute(
         } yield verifierName.fold(complexities)(complexities - _)
 
       val callableComplexities = callableComplexitiesOpt.getOrElse(Map[String, Long]())
+      val verifierComplexity   = scriptInfoOpt.fold(0L)(_.verifierComplexity)
+      val maxComplexity        = (callableComplexities.values.toSeq :+ verifierComplexity).max
 
       Json.obj(
         "address"              -> address.stringRepr,
         "script"               -> scriptInfoOpt.map(_.script.bytes().base64),
         "scriptText"           -> scriptInfoOpt.map(_.script.expr.toString),
-        "complexity"           -> scriptInfoOpt.fold(0L)(_.verifierComplexity),
-        "verifierComplexity"   -> scriptInfoOpt.fold(0L)(_.verifierComplexity),
+        "complexity"           -> maxComplexity,
+        "verifierComplexity"   -> verifierComplexity,
         "callableComplexities" -> callableComplexities,
         "extraFee"             -> (if (scriptInfoOpt.isEmpty) 0L else FeeValidation.ScriptExtraFee)
       )
@@ -90,16 +90,12 @@ case class AddressApiRoute(
     complete(Json.obj("deleted" -> deleted))
   }
 
-  def sign: Route = {
-    path("sign" / AddrSegment) { address =>
-      signPath(address, encode = true)
-    }
+  def sign: Route = path("sign" / AddrSegment) { address =>
+    signPath(address, encode = true)
   }
 
-  def signText: Route = {
-    path("signText" / AddrSegment) { address =>
-      signPath(address, encode = false)
-    }
+  def signText: Route = path("signText" / AddrSegment) { address =>
+    signPath(address, encode = false)
   }
 
   def verify: Route = path("verify" / AddrSegment) { address =>
@@ -114,9 +110,11 @@ case class AddressApiRoute(
     complete(balanceJson(address))
   }
 
-  def balances: Route = (path("balance") & get & parameters('height.as[Int].?) & parameters('address.*) & parameters('asset.?)) {
+  def balances: Route = (path("balance") & get & parameters(("height".as[Int].?, "address".as[String].*, "asset".?))) {
     (height, addresses, assetId) =>
-      complete(balancesJson(height.getOrElse(blockchain.height), addresses.toSeq, assetId.fold(Waves: Asset)(a => IssuedAsset(ByteStr.decodeBase58(a).get))))
+      complete(
+        balancesJson(height.getOrElse(blockchain.height), addresses.toSeq, assetId.fold(Waves: Asset)(a => IssuedAsset(ByteStr.decodeBase58(a).get)))
+      )
   }
 
   def balancesPost: Route = (path("balance") & (post & entity(as[JsObject]))) { request =>
@@ -174,32 +172,29 @@ case class AddressApiRoute(
   }
 
   def getData: Route =
-    extractScheduler(
-      implicit sc =>
-        path("data" / AddrSegment) { address =>
-          protobufEntity(api.DataRequest) { request =>
-            if (request.matches.nonEmpty)
-              complete(
-                Try(request.matches.r)
-                  .fold(
-                    { e =>
-                      log.trace(s"Error compiling regex ${request.matches}: ${e.getMessage}")
-                      ApiError.fromValidationError(GenericError(s"Cannot compile regex"))
-                    },
-                    _ => accountData(address, request.matches)
-                  )
-              )
-            else complete(accountDataList(address, request.keys: _*))
+    pathPrefix("data" / AddrSegment) { address =>
+      (path(Segment) & get) { key =>
+        complete(accountDataEntry(address, key))
+      } ~ extractScheduler(
+        implicit sc =>
+          (formField("matches") | parameter("matches")) { matches =>
+            complete(
+              Try(matches.r)
+                .fold(
+                  { e =>
+                    log.trace(s"Error compiling regex $matches: ${e.getMessage}")
+                    ApiError.fromValidationError(GenericError(s"Cannot compile regex"))
+                  },
+                  _ => accountData(address, matches)
+                )
+            )
+          } ~ anyParam("key").filter(_.nonEmpty) { keys =>
+            complete(accountDataList(address, keys.toSeq: _*))
           } ~ get {
             complete(accountData(address))
           }
-        }
-    )
-
-  def getDataItem: Route = (path("data" / AddrSegment / Segment) & get) {
-    case (address, key) =>
-      complete(accountDataEntry(address, key))
-  }
+      )
+    }
 
   def root: Route = (path("addresses") & get) {
     complete(wallet.privateKeyAccounts.map(_.toAddress))
@@ -232,7 +227,7 @@ case class AddressApiRoute(
       val balances = for {
         addressStr <- addresses.toSet[String]
         address    <- Address.fromString(addressStr).toOption
-      } yield blockchain.balanceOnlySnapshots(address, height, assetId).map(addressStr -> _._2).getOrElse(addressStr -> 0L)
+      } yield blockchain.balanceAtHeight(address, height, assetId).fold(addressStr -> 0L)(addressStr -> _._2)
 
       ToResponseMarshallable(balances)
     }
@@ -318,9 +313,9 @@ object AddressApiRoute {
 
     implicit val signedFormat: Format[Signed] = Format(
       ((JsPath \ "message").read[String] and
-        ((JsPath \ "publickey")
+        (JsPath \ "publickey")
           .read[String]
-          .orElse((JsPath \ "publicKey").read[String]))
+          .orElse((JsPath \ "publicKey").read[String])
         and (JsPath \ "signature").read[String])(Signed.apply _),
       Json.writes[Signed]
     )
@@ -332,10 +327,9 @@ object AddressApiRoute {
     implicit val balanceFormat: Format[Balance] = Json.format
   }
 
-  case class AccountScriptMeta(address: String, meta: Option[Dic])
+  case class AccountScriptMeta(address: String, meta: Option[FunctionSignatures])
 
   object AccountScriptMeta {
-    implicit lazy val dicFormat: Writes[Dic]                             = metaConverter.foldRoot
     implicit lazy val accountScriptMetaWrites: Writes[AccountScriptMeta] = Json.writes[AccountScriptMeta]
   }
 }

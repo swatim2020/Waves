@@ -1,6 +1,7 @@
 package com.wavesplatform.state.diffs.smart.scenarios
 
 import cats.implicits._
+import com.wavesplatform.account.Alias
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.db.WithState
@@ -27,7 +28,6 @@ import com.wavesplatform.transaction.assets._
 import com.wavesplatform.transaction.lease._
 import com.wavesplatform.transaction.smart._
 import com.wavesplatform.transaction.transfer._
-import com.wavesplatform.account.Alias
 import com.wavesplatform.utils._
 import com.wavesplatform.{NoShrink, TestTime, TransactionGen}
 import org.scalatest.PropSpec
@@ -76,7 +76,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
     leaseD    = LeaseTransaction.selfSigned(2.toByte, dapp, acc1.toAddress, 1 * Constants.UnitsInWave, MinFee, ts + 3).explicitGet()
     cancel1   = LeaseCancelTransaction.signed(1.toByte, acc1.publicKey, lease1.id(), MinFee, ts + 4, acc1.privateKey).explicitGet()
     t = TransferTransaction
-      .selfSigned(TxVersion.V2, dapp, acc1.toAddress, Waves, 1 * Constants.UnitsInWave + MinFee, Waves, InvokeScriptTxFee, None, ts + 5)
+      .selfSigned(TxVersion.V2, dapp, acc1.toAddress, Waves, 1 * Constants.UnitsInWave + MinFee, Waves, InvokeScriptTxFee, ByteStr.empty, ts + 5)
       .explicitGet()
   } yield {
     (genesis ++ Seq(setScript, lease1, lease2), Seq(cancel1, leaseD, t), acc1, dapp, ci)
@@ -85,7 +85,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
   def script(a: String): Script = {
     val ctx = {
       val directives = DirectiveSet(V4, Account, DAppType).explicitGet()
-      PureContext.build(Global, V4).withEnvironment[Environment] |+|
+      PureContext.build(V4).withEnvironment[Environment] |+|
         CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
         WavesContext.build(directives)
     }
@@ -143,7 +143,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
     def assetScript(acc: ByteStr): Script = {
       val ctx = {
         val directives = DirectiveSet(V4, AssetType, Expression).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -164,7 +164,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
     def dappScript(acc: ByteStr, asset: ByteStr): Script = {
       val ctx = {
         val directives = DirectiveSet(V4, Account, DAppType).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -179,7 +179,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
            | func bar() = {
            |   [
            |    ScriptTransfer(Address(base58'$acc'), 1, base58'$asset'),
-           |    Reissue(base58'$asset', false, 2)
+           |    Reissue(base58'$asset', 2, false)
            |   ]
            | }
         """.stripMargin
@@ -200,8 +200,8 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
 
     forAll(for { a <- accountGen; b <- accountGen } yield (a, b)) {
       case (acc1, acc2) =>
-        val g1 = GenesisTransaction.create(acc1.toAddress, ENOUGH_AMT, nextTs).explicitGet()
-        val g2 = GenesisTransaction.create(acc2.toAddress, ENOUGH_AMT, nextTs).explicitGet()
+        val g1    = GenesisTransaction.create(acc1.toAddress, ENOUGH_AMT, nextTs).explicitGet()
+        val g2    = GenesisTransaction.create(acc2.toAddress, ENOUGH_AMT, nextTs).explicitGet()
         val alias = CreateAliasTransaction.selfSigned(TxVersion.V2, acc2, Alias.create("alias").explicitGet(), MinFee, nextTs).explicitGet()
         val issue = IssueTransaction(
           TxVersion.V1,
@@ -236,7 +236,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
     def assetScript(acc: ByteStr): Script = {
       val ctx = {
         val directives = DirectiveSet(V4, AssetType, Expression).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -257,7 +257,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
     def dappScript(acc: ByteStr, asset: ByteStr): Script = {
       val ctx = {
         val directives = DirectiveSet(V4, Account, DAppType).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -272,7 +272,7 @@ class BalancesV4Test extends PropSpec with PropertyChecks with WithState with Tr
            | func bar() = {
            |   [
            |    ScriptTransfer(Address(base58'$acc'), 1, unit),
-           |    Reissue(base58'$asset', false, 1)
+           |    Reissue(base58'$asset', 1, false)
            |   ]
            | }
         """.stripMargin

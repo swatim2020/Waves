@@ -5,12 +5,11 @@ import com.wavesplatform.account.{Address, Alias}
 import com.wavesplatform.api.BlockMeta
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
-import com.wavesplatform.lang.script.Script
+import com.wavesplatform.database.protobuf.TransactionMeta
 import com.wavesplatform.protobuf.transaction.PBRecipients
 import com.wavesplatform.state._
 import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.transaction.transfer.TransferTransaction
 import com.wavesplatform.utils._
 
 object Keys {
@@ -55,7 +54,7 @@ object Keys {
     Key(LeaseBalance, hAddr(height, addressId), readLeaseBalance, writeLeaseBalance)
   def leaseStatusHistory(leaseId: ByteStr): Key[Seq[Int]] = historyKey(LeaseStatusHistory, leaseId.arr)
   def leaseStatus(leaseId: ByteStr)(height: Int): Key[Boolean] =
-    Key(LeaseStatus, hBytes(leaseId.arr, height), _(0) == 1, active => Array[Byte](if (active) 1 else 0))
+    Key(LeaseStatus, Ints.toByteArray(height) ++ leaseId.arr, _(0) == 1, active => Array[Byte](if (active) 1 else 0))
 
   def filledVolumeAndFeeHistory(orderId: ByteStr): Key[Seq[Int]] = historyKey(FilledVolumeAndFeeHistory, orderId.arr)
   def filledVolumeAndFee(orderId: ByteStr)(height: Int): Key[VolumeAndFee] =
@@ -93,7 +92,7 @@ object Keys {
   def carryFee(height: Int): Key[Long] = Key(CarryFee, h(height), Option(_).fold(0L)(Longs.fromByteArray), Longs.toByteArray)
 
   def assetScriptHistory(asset: IssuedAsset): Key[Seq[Int]] = historyKey(AssetScriptHistory, asset.id.arr)
-  def assetScript(asset: IssuedAsset)(height: Int): Key[Option[(Script, Long)]] =
+  def assetScript(asset: IssuedAsset)(height: Int): Key[Option[AssetScriptInfo]] =
     Key.opt(AssetScript, hBytes(asset.id.arr, height), readAssetScript, writeAssetScript)
   def assetScriptPresent(asset: IssuedAsset)(height: Int): Key[Option[Unit]] =
     Key.opt(AssetScript, hBytes(asset.id.arr, height), _ => (), _ => Array[Byte]())
@@ -122,14 +121,6 @@ object Keys {
       writeTransaction
     )
 
-  def transferTransactionAt(height: Height, n: TxNum): Key[Option[TransferTransaction]] =
-    Key(
-      NthTransactionInfoAtHeight,
-      hNum(height, n),
-      bytes => readTransferTransaction(bytes),
-      unsupported("Can not explicitly write transfer transaction")
-    )
-
   def addressTransactionSeqNr(addressId: AddressId): Key[Int] =
     bytesSeqNr(AddressTransactionSeqNr, addressId.toByteArray)
 
@@ -141,12 +132,12 @@ object Keys {
       writeTransactionHNSeqAndType
     )
 
-  def transactionHNById(txId: TransactionId): Key[Option[(Height, TxNum)]] =
+  def transactionMetaById(txId: TransactionId): Key[Option[TransactionMeta]] =
     Key.opt(
-      TransactionHeightAndNumsById,
+      TransactionMetaById,
       txId.arr,
-      readTransactionHN,
-      writeTransactionHN
+      TransactionMeta.parseFrom,
+      _.toByteArray
     )
 
   def blockTransactionsFee(height: Int): Key[Long] =

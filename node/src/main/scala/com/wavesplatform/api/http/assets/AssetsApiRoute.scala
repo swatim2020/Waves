@@ -22,7 +22,7 @@ import com.wavesplatform.http.{BroadcastRoute, CustomJson}
 import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.network.UtxPoolSynchronizer
 import com.wavesplatform.settings.RestAPISettings
-import com.wavesplatform.state.{AssetDescription, Blockchain}
+import com.wavesplatform.state.{AssetDescription, AssetScriptInfo, Blockchain}
 import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.TransactionFactory
 import com.wavesplatform.transaction.TxValidationError.GenericError
@@ -91,21 +91,21 @@ case class AssetsApiRoute(
               }
           }
         } ~ pathPrefix("details") {
-          (pathEndOrSingleSlash & parameters(('id.*, 'full.as[Boolean] ? false))) { (ids, full) =>
-            multipleDetailsGet(ids.toSeq, full)
-          } ~ (path(AssetId) & parameter('full.as[Boolean] ? false)) { (assetId, full) =>
+          (pathEndOrSingleSlash & parameters(("id".as[String].*, "full".as[Boolean] ? false))) { (ids, full) =>
+            multipleDetailsGet(ids.toSeq.reverse, full)
+          } ~ (path(AssetId) & parameter("full".as[Boolean] ? false)) { (assetId, full) =>
             singleDetails(assetId, full)
           }
-        } ~ (path("nft" / AddrSegment / "limit" / IntNumber) & parameter('after.as[String].?)) { (address, limit, maybeAfter) =>
+        } ~ (path("nft" / AddrSegment / "limit" / IntNumber) & parameter("after".as[String].?)) { (address, limit, maybeAfter) =>
           nft(address, limit, maybeAfter)
         } ~ pathPrefix(AssetId / "distribution") { assetId =>
           pathEndOrSingleSlash(balanceDistribution(assetId)) ~
-            (path(IntNumber / "limit" / IntNumber) & parameter('after.?)) { (height, limit, maybeAfter) =>
+            (path(IntNumber / "limit" / IntNumber) & parameter("after".?)) { (height, limit, maybeAfter) =>
               balanceDistributionAtHeight(assetId, height, limit, maybeAfter)
             }
         }
       } ~ post {
-        (path("details") & parameter('full.as[Boolean] ? false)) { full =>
+        (path("details") & parameter("full".as[Boolean] ? false)) { full =>
           jsonPost[JsObject] { jsv =>
             (jsv \ "ids").validate[List[String]] match {
               case JsSuccess(ids, _) =>
@@ -122,35 +122,32 @@ case class AssetsApiRoute(
     }
 
   def balances(address: Address): Route = extractScheduler { implicit s =>
-    implicit val jsonStreamingSupport: ToResponseMarshaller[Source[JsValue, NotUsed]] =
+    implicit val jsonStreamingSupport: ToResponseMarshaller[Source[JsObject, NotUsed]] =
       jsonStreamMarshaller(s"""{"address":"$address","balances":[""", ",", "]}")
-    val value = Source.fromPublisher(
-      commonAccountApi
-        .portfolio(address)
-        .flatMap {
-          case (assetId, balance) =>
-            Observable.fromIterable(commonAssetsApi.fullInfo(assetId).map {
-              case CommonAssetsApi.AssetInfo(assetInfo, issueTransaction, sponsorBalance) =>
-                Json.obj(
-                  "assetId"    -> assetId.id.toString,
-                  "balance"    -> balance,
-                  "reissuable" -> assetInfo.reissuable,
-                  "minSponsoredAssetFee" -> (assetInfo.sponsorship match {
-                    case 0           => JsNull
-                    case sponsorship => JsNumber(sponsorship)
-                  }),
-                  "sponsorBalance"   -> sponsorBalance,
-                  "quantity"         -> JsNumber(BigDecimal(assetInfo.totalVolume)),
-                  "issueTransaction" -> issueTransaction.map(_.json())
-                )
-            })
 
-        }
-        .toReactivePublisher
-    )
-    complete(
-      value
-    )
+    complete(commonAccountApi.portfolio(address).toListL.runToFuture.map { balances =>
+      Source.fromIterator(
+        () =>
+          balances.iterator.flatMap {
+            case (assetId, balance) =>
+              commonAssetsApi.fullInfo(assetId).map {
+                case CommonAssetsApi.AssetInfo(assetInfo, issueTransaction, sponsorBalance) =>
+                  Json.obj(
+                    "assetId"    -> assetId.id.toString,
+                    "balance"    -> balance,
+                    "reissuable" -> assetInfo.reissuable,
+                    "minSponsoredAssetFee" -> (assetInfo.sponsorship match {
+                      case 0           => JsNull
+                      case sponsorship => JsNumber(sponsorship)
+                    }),
+                    "sponsorBalance"   -> sponsorBalance,
+                    "quantity"         -> JsNumber(BigDecimal(assetInfo.totalVolume)),
+                    "issueTransaction" -> issueTransaction.map(_.json())
+                  )
+              }
+          }
+      )
+    })
   }
 
   def balance(address: Address, assetId: IssuedAsset): Route = complete(balanceJson(address, assetId))
@@ -172,7 +169,7 @@ case class AssetsApiRoute(
     }
 
   def balanceDistribution(assetId: IssuedAsset): Route =
-    balanceDistribution(assetId, blockchain.height, settings.distributionAddressLimit, None) { l =>
+    balanceDistribution(assetId, blockchain.height, Int.MaxValue, None) { l =>
       Json.toJson(l.map { case (a, b) => a.stringRepr -> b }.toMap)
     }
 
@@ -301,7 +298,10 @@ object AssetsApiRoute {
     // (timestamp, height)
     def additionalInfo(id: ByteStr): Either[String, (Long, Int)] =
       for {
-        tt <- blockchain.transactionInfo(id).filter { case (_, _, confirmed) => confirmed }.toRight("Failed to find issue/invokeScript transaction by ID")
+        tt <- blockchain
+          .transactionInfo(id)
+          .filter { case (_, _, confirmed) => confirmed }
+          .toRight("Failed to find issue/invokeScript transaction by ID")
         (h, mtx, _) = tt
         ts <- (mtx match {
           case tx: IssueTransaction        => Some(tx.timestamp)
@@ -335,7 +335,7 @@ object AssetsApiRoute {
         }),
         "originTransactionId" -> JsString(description.source.toString)
       ) ++ script.toSeq.map {
-        case (script, complexity) =>
+        case AssetScriptInfo(script, complexity) =>
           "scriptDetails" -> Json.obj(
             "scriptComplexity" -> JsNumber(BigDecimal(complexity)),
             "script"           -> JsString(script.bytes().base64),

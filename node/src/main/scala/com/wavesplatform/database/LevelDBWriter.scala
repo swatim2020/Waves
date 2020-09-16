@@ -15,9 +15,9 @@ import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils._
 import com.wavesplatform.database
 import com.wavesplatform.database.patch.DisableHijackedAliases
+import com.wavesplatform.database.protobuf.TransactionMeta
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.lang.ValidationError
-import com.wavesplatform.lang.script.Script
 import com.wavesplatform.protobuf.transaction.PBTransactions
 import com.wavesplatform.settings.{BlockchainSettings, Constants, DBSettings, WavesSettings}
 import com.wavesplatform.state.reader.LeaseDetails
@@ -36,9 +36,8 @@ import org.iq80.leveldb.DB
 import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
-import scala.collection.JavaConverters._
-import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -58,7 +57,7 @@ object LevelDBWriter extends ScorexLogging {
   }
 
   private[database] def closest(v: Seq[Int], h: Int): Option[Int] = {
-    v.takeWhile(_ <= h).lastOption // Should we use binary search?
+    v.dropWhile(_ > h).headOption // Should we use binary search?
   }
 
   implicit class ReadOnlyDBExt(val db: ReadOnlyDB) extends AnyVal {
@@ -108,7 +107,7 @@ object LevelDBWriter extends ScorexLogging {
       }
     }
 
-    recMergeFixed(wbh.head, wbh.tail, lbh.head, lbh.tail, ArrayBuffer.empty)
+    recMergeFixed(wbh.head, wbh.tail, lbh.head, lbh.tail, ArrayBuffer.empty).toSeq
   }
 
   def apply(db: DB, spendableBalanceChanged: Observer[(Address, Asset)], settings: WavesSettings): LevelDBWriter with AutoCloseable = {
@@ -208,7 +207,7 @@ abstract class LevelDBWriter private[database] (
     }
   }
 
-  override protected def loadAssetScript(asset: IssuedAsset): Option[(Script, Long)] = readOnly { db =>
+  override protected def loadAssetScript(asset: IssuedAsset): Option[AssetScriptInfo] = readOnly { db =>
     db.fromHistory(Keys.assetScriptHistory(asset), Keys.assetScript(asset)).flatten
   }
 
@@ -292,7 +291,7 @@ abstract class LevelDBWriter private[database] (
 
   private def appendBalances(
       balances: Map[AddressId, Map[Asset, Long]],
-      issuedAssets: Map[IssuedAsset, (AssetStaticInfo, AssetInfo, AssetVolumeInfo)],
+      issuedAssets: Map[IssuedAsset, NewAssetInfo],
       rw: RW,
       threshold: Int,
       balanceThreshold: Int
@@ -323,7 +322,7 @@ abstract class LevelDBWriter private[database] (
               assetBalanceFilter.put(kabh.suffix)
               if (balance > 0 && issuedAssets
                     .get(a)
-                    .map(_._1.nft)
+                    .map(_.static.nft)
                     .orElse(assetDescription(a).map(_.nft))
                     .getOrElse(false)) {
                 updatedNftLists.put(addressId.toLong, a)
@@ -334,16 +333,16 @@ abstract class LevelDBWriter private[database] (
     }
 
     for ((addressId, nftIds) <- updatedNftLists.asMap().asScala) {
-      val kCount           = Keys.nftCount(AddressId(addressId))
+      val kCount           = Keys.nftCount(AddressId(addressId.toLong))
       val previousNftCount = rw.get(kCount)
       rw.put(kCount, previousNftCount + nftIds.size())
       for ((id, idx) <- nftIds.asScala.zipWithIndex) {
-        rw.put(Keys.nftAt(AddressId(addressId), idx, id), Some(()))
+        rw.put(Keys.nftAt(AddressId(addressId.toLong), idx, id), Some(()))
       }
     }
 
     changedAssetBalances.asMap().forEach { (asset, addresses) =>
-      rw.put(Keys.changedBalances(height, asset), addresses.asScala.map(AddressId(_)).toSeq)
+      rw.put(Keys.changedBalances(height, asset), addresses.asScala.map(id => AddressId(id.toLong)).toSeq)
     }
   }
 
@@ -356,11 +355,11 @@ abstract class LevelDBWriter private[database] (
       leaseBalances: Map[AddressId, LeaseBalance],
       addressTransactions: Map[AddressId, Seq[TransactionId]],
       leaseStates: Map[ByteStr, Boolean],
-      issuedAssets: Map[IssuedAsset, (AssetStaticInfo, AssetInfo, AssetVolumeInfo)],
+      issuedAssets: Map[IssuedAsset, NewAssetInfo],
       updatedAssets: Map[IssuedAsset, Ior[AssetInfo, AssetVolumeInfo]],
       filledQuantity: Map[ByteStr, VolumeAndFee],
       scripts: Map[AddressId, Option[AccountScriptInfo]],
-      assetScripts: Map[IssuedAsset, Option[(Script, Long)]],
+      assetScripts: Map[IssuedAsset, Option[AssetScriptInfo]],
       data: Map[Address, AccountDataInfo],
       aliases: Map[Alias, AddressId],
       sponsorship: Map[IssuedAsset, Sponsorship],
@@ -382,11 +381,11 @@ abstract class LevelDBWriter private[database] (
         rw.put(Keys.safeRollbackHeight, height - dbSettings.maxRollbackDepth)
       }
 
-      val transactions: Map[TransactionId, (Transaction, TxNum)] =
+      val transactions: Map[TransactionId, (Transaction, TxNum, Boolean)] =
         block.transactionData.zipWithIndex.map { in =>
           val (tx, idx) = in
           val k         = TransactionId(tx.id())
-          val v         = (tx, TxNum(idx.toShort))
+          val v         = (tx, TxNum(idx.toShort), !failedTransactionIds.contains(tx.id()))
           k -> v
         }.toMap
 
@@ -428,14 +427,14 @@ abstract class LevelDBWriter private[database] (
         expiredKeys ++= updateHistory(rw, Keys.filledVolumeAndFeeHistory(orderId), threshold, Keys.filledVolumeAndFee(orderId))
       }
 
-      for ((asset, (staticInfo, info, volumeInfo)) <- issuedAssets) {
+      for ((asset, NewAssetInfo(staticInfo, info, volumeInfo)) <- issuedAssets) {
         rw.put(Keys.assetStaticInfo(asset), staticInfo.some)
         rw.put(Keys.assetDetails(asset)(height), (info, volumeInfo))
       }
 
       for ((asset, infoToUpdate) <- updatedAssets) {
         rw.fromHistory(Keys.assetDetailsHistory(asset), Keys.assetDetails(asset))
-          .orElse(issuedAssets.get(asset).map { case (_, i, vi) => (i, vi) })
+          .orElse(issuedAssets.get(asset).map { case NewAssetInfo(_, i, vi) => (i, vi) })
           .foreach {
             case (info, vol) =>
               val updInfo = infoToUpdate.left
@@ -483,8 +482,7 @@ abstract class LevelDBWriter private[database] (
         val kk        = Keys.addressTransactionSeqNr(addressId)
         val nextSeqNr = rw.get(kk) + 1
         val txTypeNumSeq = txIds.map { txId =>
-          val (tx, num) = transactions(txId)
-
+          val (tx, num, _) = transactions(txId)
           (tx.typeId, num)
         }
         rw.put(Keys.addressTransactionHN(addressId, nextSeqNr), Some((Height(height), txTypeNumSeq.sortBy(-_._2))))
@@ -495,9 +493,9 @@ abstract class LevelDBWriter private[database] (
         rw.put(Keys.addressIdOfAlias(alias), Some(addressId))
       }
 
-      for ((id, (tx, num)) <- transactions) {
-        rw.put(Keys.transactionAt(Height(height), num), Some((tx, !failedTransactionIds.contains(id))))
-        rw.put(Keys.transactionHNById(id), Some((Height(height), num)))
+      for ((id, (tx, num, succeeded)) <- transactions) {
+        rw.put(Keys.transactionAt(Height(height), num), Some((tx, succeeded)))
+        rw.put(Keys.transactionMetaById(id), Some(TransactionMeta(height, num, tx.typeId, !succeeded)))
       }
 
       val activationWindowSize = settings.functionalitySettings.activationWindowSize(height)
@@ -514,7 +512,7 @@ abstract class LevelDBWriter private[database] (
           approvedFeaturesCache = newlyApprovedFeatures ++ rw.get(Keys.approvedFeatures)
           rw.put(Keys.approvedFeatures, approvedFeaturesCache)
 
-          val featuresToSave = newlyApprovedFeatures.mapValues(_ + activationWindowSize) ++ rw.get(Keys.activatedFeatures)
+          val featuresToSave = (newlyApprovedFeatures.view.mapValues(_ + activationWindowSize) ++ rw.get(Keys.activatedFeatures)).toMap
 
           activatedFeaturesCache = featuresToSave ++ settings.functionalitySettings.preActivatedFeatures
           rw.put(Keys.activatedFeatures, featuresToSave)
@@ -544,8 +542,10 @@ abstract class LevelDBWriter private[database] (
         case (txId, result) =>
           val (txHeight, txNum) = transactions
             .get(TransactionId(txId))
-            .map { case (_, txNum) => (height, txNum) }
-            .orElse(rw.get(Keys.transactionHNById(TransactionId(txId))))
+            .map { case (_, txNum, _) => (height, txNum) }
+            .orElse(rw.get(Keys.transactionMetaById(TransactionId(txId))).map {
+              case TransactionMeta(height, txNum, _, _) => (height, TxNum(txNum.toShort))
+            })
             .getOrElse(throw new IllegalArgumentException(s"Couldn't find transaction height and num: $txId"))
 
           try rw.put(Keys.invokeScriptResult(txHeight, txNum), Some(result))
@@ -557,7 +557,7 @@ abstract class LevelDBWriter private[database] (
 
       expiredKeys.foreach(rw.delete(_, "expired-keys"))
 
-      if (activatedFeatures.get(BlockchainFeatures.DataTransaction.id).contains(height)) {
+      if (DisableHijackedAliases.height == height) {
         disabledAliases = DisableHijackedAliases(rw)
       }
 
@@ -572,11 +572,11 @@ abstract class LevelDBWriter private[database] (
       log.debug(s"Rolling back to block $targetBlockId at $targetHeight")
 
       val discardedBlocks: Seq[(Block, ByteStr)] = for (currentHeight <- height until targetHeight by -1) yield {
-        val balancesToInvalidate     = Seq.newBuilder[(Address, Asset)]
-        val ordersToInvalidate       = Seq.newBuilder[ByteStr]
-        val scriptsToDiscard         = Seq.newBuilder[Address]
-        val assetScriptsToDiscard    = Seq.newBuilder[IssuedAsset]
-        val accountDataToInvalidate  = Seq.newBuilder[(Address, String)]
+        val balancesToInvalidate    = Seq.newBuilder[(Address, Asset)]
+        val ordersToInvalidate      = Seq.newBuilder[ByteStr]
+        val scriptsToDiscard        = Seq.newBuilder[Address]
+        val assetScriptsToDiscard   = Seq.newBuilder[IssuedAsset]
+        val accountDataToInvalidate = Seq.newBuilder[(Address, String)]
 
         val h = Height(currentHeight)
 
@@ -597,7 +597,7 @@ abstract class LevelDBWriter private[database] (
           rw.iterateOver(KeyTags.ChangedAssetBalances.prefixBytes ++ Ints.toByteArray(h)) { e =>
             val assetId = IssuedAsset(ByteStr(e.getKey.takeRight(32)))
             for ((addressId, address) <- changedAddresses) {
-              val kabh = Keys.assetBalanceHistory(addressId, assetId)
+              val kabh    = Keys.assetBalanceHistory(addressId, assetId)
               val history = rw.get(kabh)
               if (history.nonEmpty && history.head == currentHeight) {
                 log.trace(s"Discarding ${assetId.id} balance for $address at $currentHeight")
@@ -689,7 +689,7 @@ abstract class LevelDBWriter private[database] (
 
               if (tx.typeId != GenesisTransaction.typeId) {
                 rw.delete(Keys.transactionAt(h, num))
-                rw.delete(Keys.transactionHNById(TransactionId(tx.id())))
+                rw.delete(Keys.transactionMetaById(TransactionId(tx.id())))
               }
           }
 
@@ -700,9 +700,8 @@ abstract class LevelDBWriter private[database] (
           rw.delete(Keys.blockReward(currentHeight))
           rw.delete(Keys.wavesAmount(currentHeight))
 
-          if (activatedFeatures.get(BlockchainFeatures.DataTransaction.id).contains(currentHeight)) {
-            DisableHijackedAliases.revert(rw)
-            disabledAliases = Set.empty
+          if (DisableHijackedAliases.height == currentHeight) {
+            disabledAliases = DisableHijackedAliases.revert(rw)
           }
 
           val hitSource = rw.get(Keys.hitSource(currentHeight)).get
@@ -726,12 +725,12 @@ abstract class LevelDBWriter private[database] (
   }
 
   private def rollbackAssetsInfo(rw: RW, currentHeight: Int): Unit = {
-    val issuedKey = Keys.issuedAssets(currentHeight)
-    val updatedKey = Keys.updatedAssets(currentHeight)
+    val issuedKey      = Keys.issuedAssets(currentHeight)
+    val updatedKey     = Keys.updatedAssets(currentHeight)
     val sponsorshipKey = Keys.sponsorshipAssets(currentHeight)
 
-    val issued = rw.get(issuedKey)
-    val updated = rw.get(updatedKey)
+    val issued      = rw.get(issuedKey)
+    val updated     = rw.get(updatedKey)
     val sponsorship = rw.get(sponsorshipKey)
 
     rw.delete(issuedKey)
@@ -768,8 +767,8 @@ abstract class LevelDBWriter private[database] (
 
   override def transferById(id: ByteStr): Option[(Int, TransferTransaction)] = readOnly { db =>
     for {
-      (height, num) <- db.get(Keys.transactionHNById(TransactionId @@ id))
-      tx            <- db.get(Keys.transferTransactionAt(height, num))
+      TransactionMeta(height, num, TransferTransaction.typeId, _) <- db.get(Keys.transactionMetaById(TransactionId @@ id))
+      tx <- db.get(Keys.transactionAt(Height(height), TxNum(num.toShort))).collect { case (t: TransferTransaction, true) => t }
     } yield (height, tx)
   }
 
@@ -778,13 +777,13 @@ abstract class LevelDBWriter private[database] (
   protected def transactionInfo(id: ByteStr, db: ReadOnlyDB): Option[(Int, Transaction, Boolean)] = {
     val txId = TransactionId(id)
     for {
-      (height, num) <- db.get(Keys.transactionHNById(txId))
-      (tx, status)  <- db.get(Keys.transactionAt(height, num))
-    } yield (height, tx, status)
+      TransactionMeta(height, num, _, failed) <- db.get(Keys.transactionMetaById(txId))
+      (tx, _)                                 <- db.get(Keys.transactionAt(Height(height), TxNum(num.toShort)))
+    } yield (height, tx, !failed)
   }
 
-  override def transactionHeight(id: ByteStr): Option[Int] = readOnly { db =>
-    db.get(Keys.transactionHNById(TransactionId(id))).map(_._1)
+  override def transactionMeta(id: ByteStr): Option[(Int, Boolean)] = readOnly { db =>
+    db.get(Keys.transactionMetaById(TransactionId(id))).map { case TransactionMeta(height, _, _, failed) => (height, !failed) }
   }
 
   override def resolveAlias(alias: Alias): Either[ValidationError, Address] = readOnly { db =>
@@ -818,7 +817,7 @@ abstract class LevelDBWriter private[database] (
     .recordStats()
     .build[(Int, AddressId), LeaseBalance]()
 
-  override def balanceOnlySnapshots(address: Address, height: Int, assetId: Asset = Waves): Option[(Int, Long)] = readOnly { db =>
+  override def balanceAtHeight(address: Address, height: Int, assetId: Asset = Waves): Option[(Int, Long)] = readOnly { db =>
     db.get(Keys.addressId(address)).flatMap { addressId =>
       assetId match {
         case Waves =>
@@ -848,36 +847,6 @@ abstract class LevelDBWriter private[database] (
     }
   }
 
-  override def collectActiveLeases(filter: LeaseTransaction => Boolean): Seq[LeaseTransaction] = readOnly { db =>
-    val activeLeaseIds = mutable.Set.empty[ByteStr]
-    db.iterateOver(KeyTags.LeaseStatus) { e =>
-      val leaseId = e.getKey.slice(2, e.getKey.length - 4)
-      if (e.getValue.headOption.contains(1.toByte)) {
-        activeLeaseIds += ByteStr(leaseId)
-      } else {
-        activeLeaseIds -= ByteStr(leaseId)
-      }
-    }
-
-    val activeLeaseTransactions = for {
-      leaseId <- activeLeaseIds
-      (h, n)  <- db.get(Keys.transactionHNById(TransactionId(leaseId)))
-      tx      <- db.get(Keys.transactionAt(h, n)).collect { case (lt: LeaseTransaction, true) if filter(lt) => lt }
-    } yield tx
-
-    activeLeaseTransactions.toSeq
-  }
-
-  override def collectLposPortfolios[A](pf: PartialFunction[(Address, Portfolio), A]): Map[Address, A] = readOnly { db =>
-    val b = Map.newBuilder[Address, A]
-    for (id <- 1L to db.get(Keys.lastAddressId).getOrElse(0L)) {
-      val addressId = AddressId(id)
-      val address   = db.get(Keys.idToAddress(addressId))
-      pf.runWith(b += address -> _)(address -> loadLposPortfolio(db, addressId))
-    }
-    b.result()
-  }
-
   def loadScoreOf(blockId: ByteStr): Option[BigInt] = {
     readOnly(db => db.get(Keys.heightOf(blockId)).map(h => db.get(Keys.score(h))))
   }
@@ -900,11 +869,13 @@ abstract class LevelDBWriter private[database] (
       .flatMap { h =>
         val height = Height(h)
         db.get(Keys.blockMetaAt(height))
-          .map(_.header.featureVotes.toSeq)
+          .map(_.header.featureVotes)
           .getOrElse(Seq.empty)
       }
       .groupBy(identity)
+      .view
       .mapValues(_.size)
+      .toMap
   }
 
   override def blockRewardVotes(height: Int): Seq[Long] = readOnly { db =>

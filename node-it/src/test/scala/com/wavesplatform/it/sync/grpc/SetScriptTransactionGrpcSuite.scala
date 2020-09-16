@@ -23,7 +23,7 @@ class SetScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
       val scriptText =
         s"""
         match tx {
-          case t: Transaction => {
+          case _: Transaction => {
             let A = base58'${secondAcc.publicKey}'
             let B = base58'${thirdAcc.publicKey}'
             let AC = sigVerify(tx.bodyBytes,tx.proofs[0],A)
@@ -77,7 +77,7 @@ class SetScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
           TransferTransactionData.of(
             recipient = Some(Recipient().withPublicKeyHash(thirdAddress)),
             amount = Some(Amount.of(ByteString.EMPTY, transferAmount)),
-            None
+            ByteString.EMPTY
           )
         )
       )
@@ -87,7 +87,6 @@ class SetScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         ByteString.copyFrom(crypto.sign(thirdAcc.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsignedTransfer))).explicitGet().bodyBytes()).arr)
 
       sender.broadcast(unsignedTransfer, Seq(sig1, sig2), waitForTx = true)
-
       sender.wavesBalance(contractAddr).available shouldBe firstBalance - transferAmount - transferFee
       sender.wavesBalance(thirdAddress).available shouldBe thirdBalance + transferAmount
     }
