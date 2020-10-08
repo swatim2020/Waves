@@ -13,7 +13,7 @@ import com.wavesplatform.block.{Block, BlockHeader}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.consensus.PoSSelector
 import com.wavesplatform.database.openDB
-import com.wavesplatform.events.{BlockchainUpdateTriggersImpl, BlockchainUpdated, UtxEvent}
+import com.wavesplatform.events.{BlockchainUpdateTriggers, UtxEvent}
 import com.wavesplatform.extensions.{Context, Extension}
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.history.StorageFactory
@@ -97,13 +97,17 @@ object Importer extends ScorexLogging {
       }
   }
 
+  def loadSettings(file: Option[File]): WavesSettings = {
+    val settings = Application.loadApplicationConfig(file)
+    settings.copy(dbSettings = settings.dbSettings.copy(useBloomFilter = true))
+  }
+
   def initExtensions(
       wavesSettings: WavesSettings,
       blockchainUpdater: BlockchainUpdaterImpl,
       appenderScheduler: Scheduler,
       extensionTime: Time,
       utxPool: UtxPool,
-      blockchainUpdatedObservable: Observable[BlockchainUpdated],
       db: DB,
       extensionActorSystem: ActorSystem
   ): Seq[Extension] =
@@ -123,7 +127,6 @@ object Importer extends ScorexLogging {
             TracedResult.wrapE(Left(GenericError("Not implemented during import")))
           override def spendableBalanceChanged: Observable[(Address, Asset)] = Observable.empty
           override def actorSystem: ActorSystem                              = extensionActorSystem
-          override def blockchainUpdated: Observable[BlockchainUpdated]      = blockchainUpdatedObservable
           override def utxEvents: Observable[UtxEvent]                       = Observable.empty
           override def transactionsApi: CommonTransactionsApi =
             CommonTransactionsApi(
@@ -132,7 +135,7 @@ object Importer extends ScorexLogging {
               blockchainUpdater,
               utxPool,
               wallet,
-              _ => TracedResult.wrapE(Left(GenericError("Not implemented during import"))),
+              _ => Future.successful(TracedResult.wrapE(Left(GenericError("Not implemented during import")))),
               Application.loadBlockAt(db, blockchainUpdater)
             )
           override def blocksApi: CommonBlocksApi =
@@ -221,7 +224,7 @@ object Importer extends ScorexLogging {
 
   def main(args: Array[String]): Unit = {
     val importOptions = parseOptions(args)
-    val settings      = Application.loadApplicationConfig(importOptions.configFile)
+    val settings      = loadSettings(importOptions.configFile)
 
     def initFileStream(file: String): InputStream = {
       log.info(s"Opening import file: $file")
@@ -245,17 +248,15 @@ object Importer extends ScorexLogging {
     val time      = new NTP(settings.ntpServer)
 
     val actorSystem              = ActorSystem("wavesplatform-import")
-    val blockchainUpdated        = PublishSubject[BlockchainUpdated]()
-    val blockchainUpdateTriggers = new BlockchainUpdateTriggersImpl(blockchainUpdated)
     val db                       = openDB(settings.dbSettings.directory)
     val (blockchainUpdater, levelDb) =
-      StorageFactory(settings, db, time, Observer.empty, blockchainUpdateTriggers)
+      StorageFactory(settings, db, time, Observer.empty, BlockchainUpdateTriggers.noop)
     val utxPool     = new UtxPoolImpl(time, blockchainUpdater, PublishSubject(), settings.utxSettings)
     val pos         = PoSSelector(blockchainUpdater, settings.synchronizationSettings)
     val extAppender = BlockAppender(blockchainUpdater, time, utxPool, pos, scheduler, importOptions.verify) _
 
     checkGenesis(settings, blockchainUpdater)
-    val extensions = initExtensions(settings, blockchainUpdater, scheduler, time, utxPool, blockchainUpdated, db, actorSystem)
+    val extensions = initExtensions(settings, blockchainUpdater, scheduler, time, utxPool, db, actorSystem)
 
     sys.addShutdownHook {
       quit = true

@@ -15,7 +15,6 @@ coverageExcludedPackages := ""
 
 inConfig(Compile)(
   Seq(
-    PB.protoSources in Compile := Seq(sourceDirectory.value / "protobuf"),
     PB.targets += scalapb.gen(flatPackage = true) -> sourceManaged.value,
     PB.deleteTargetDirectory := false,
     packageDoc / publishArtifact := false,
