@@ -3155,7 +3155,7 @@
           "assets"
         ],
         "summary": "Account balance in asset",
-        "description": "Get the account balance in a given asset",
+        "description": "Get the account balance in a given asset. 0 for non-existent asset (use [GET /assets/details/{assetId}](#/assets/getAssetDetails) to check if the asset exists)",
         "operationId": "getAssetBalanceByAddress",
         "parameters": [
           {
