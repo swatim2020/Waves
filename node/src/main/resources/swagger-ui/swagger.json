@@ -2024,6 +2024,48 @@
         }
       }
     },
+    "/transactions/info": {
+      "get": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Transaction info",
+        "description": "Get a transactions by its IDs",
+        "operationId": "info_multiple",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Transaction IDs base58 encoded",
+            "required": true,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/parameters/txId"
+              },
+              "minItems": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Transaction"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/transactions/sign": {
       "post": {
         "tags": [
@@ -2726,6 +2768,73 @@
         "x-codegen-request-body-name": "code"
       }
     },
+    "/utils/script/evaluate/{address}": {
+      "post": {
+        "tags": [
+          "utils"
+        ],
+        "summary": "Evaluate",
+        "description": "Evaluates the provided expression, taking into account the deployed dApp contract",
+        "operationId": "script_evaluate",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "Address of the deployed dApp contract",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Expression to evaluate",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expr": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string"
+                    },
+                    "expr": {
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "value": {
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/utils/seed": {
       "get": {
         "tags": [
@@ -3075,7 +3184,7 @@
         "operationId": "getAssetDetails",
         "parameters": [
           {
-            "$ref":"#/components/parameters/assetId"
+            "$ref": "#/components/parameters/assetId"
           },
           {
             "name": "full",
@@ -3162,7 +3271,7 @@
             "$ref": "#/components/parameters/address"
           },
           {
-            "$ref":"#/components/parameters/assetId"
+            "$ref": "#/components/parameters/assetId"
           }
         ],
         "responses": {
@@ -3206,7 +3315,7 @@
         "operationId": "getAssetDistributionOld",
         "parameters": [
           {
-            "$ref":"#/components/parameters/assetId"
+            "$ref": "#/components/parameters/assetId"
           }
         ],
         "responses": {
@@ -3234,7 +3343,7 @@
         "operationId": "getAssetDistribution",
         "parameters": [
           {
-            "$ref":"#/components/parameters/assetId"
+            "$ref": "#/components/parameters/assetId"
           },
           {
             "name": "height",
@@ -3871,7 +3980,7 @@
                       "type": "string"
                     }
                   }
-                }  
+                }
               }
             }
           }
@@ -4770,10 +4879,10 @@
             "format": "int64"
           },
           "VRF": {
-              "type": "string"
+            "type": "string"
           },
           "transactionsRoot": {
-              "type": "string"
+            "type": "string"
           }
         }
       },
@@ -4862,10 +4971,10 @@
             "format": "int64"
           },
           "VRF": {
-              "type": "string"
+            "type": "string"
           },
           "transactionsRoot": {
-              "type": "string"
+            "type": "string"
           }
         }
       },
@@ -4955,7 +5064,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["binary"]
+            "enum": [
+              "binary"
+            ]
           },
           "value": {
             "type": "string",
@@ -4976,7 +5087,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["boolean"]
+            "enum": [
+              "boolean"
+            ]
           },
           "value": {
             "type": "boolean"
@@ -5040,7 +5153,9 @@
           },
           "type": {
             "type": "string",
-            "enum": ["integer"]
+            "enum": [
+              "integer"
+            ]
           },
           "value": {
             "type": "integer",
@@ -5061,9 +5176,11 @@
           },
           "type": {
             "type": "string",
-            "enum": ["string"]
+            "enum": [
+              "string"
+            ]
           },
-          "value":{
+          "value": {
             "type": "string"
           }
         }
@@ -5716,7 +5833,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -5850,7 +5967,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -5916,7 +6033,7 @@
             }
           },
           "applicationStatus": {
-                "type": "string"
+            "type": "string"
           },
           "height": {
             "type": "integer",
@@ -5975,7 +6092,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6064,7 +6181,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6086,7 +6203,7 @@
           },
           "height": {
             "type": "integer",
-             "format": "int32"
+            "format": "int32"
           }
         }
       },
@@ -6213,7 +6330,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6241,19 +6358,19 @@
           },
           "transfers": {
             "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "recipient": {
-                    "type": "string"
-                  },
-                  "amount": {
-                    "type": "integer",
-                    "format": "int64"
-                  }
+            "items": {
+              "type": "object",
+              "properties": {
+                "recipient": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer",
+                  "format": "int64"
                 }
               }
-            },
+            }
+          },
           "applicationStatus": {
             "type": "string"
           },
@@ -6310,7 +6427,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6386,7 +6503,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6601,7 +6718,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
@@ -6636,7 +6753,7 @@
             "type": "integer",
             "format": "int32"
           }
-        }  
+        }
       },
       "UpdateAssetInfoTransaction": {
         "type": "object",
@@ -6685,7 +6802,7 @@
           "proofs": {
             "type": "array",
             "items": {
-                "type": "string"
+              "type": "string"
             }
           },
           "version": {
